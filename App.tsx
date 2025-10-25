@@ -241,9 +241,9 @@ const CreatePostModal = ({ isOpen, onClose, onPostCreated, userData }: CreatePos
 
         setIsLoading(true);
         setError(null);
-        let mediaUrl: string | undefined = undefined;
 
         try {
+            let mediaUrl: string | undefined = undefined;
             if (mediaFile && mediaType) {
                 mediaUrl = await uploadMediaToStorage(mediaFile, userData.id, mediaType);
             }
@@ -252,8 +252,7 @@ const CreatePostModal = ({ isOpen, onClose, onPostCreated, userData }: CreatePos
                 authorId: userData.id,
                 authorUsername: userData.username,
                 textContent: textContent,
-                mediaUrl: mediaUrl,
-                mediaType: mediaType || undefined,
+                ...(mediaUrl && mediaType && { mediaUrl: mediaUrl, mediaType: mediaType }),
             };
 
             const result = await createPost(newPost);
