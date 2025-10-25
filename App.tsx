@@ -18,6 +18,8 @@ import {
 } from './services/firebaseService';
 import Discover from './components/Discover';
 import ChatsPage from './components/ChatsPage';
+import TermsOfServicePage from './components/TermsOfServicePage';
+import PrivacyPolicyPage from './components/PrivacyPolicyPage';
 
 // --- HELPER & MOCK DATA ---
 const ORIENTATION_MESSAGES = {
@@ -536,7 +538,7 @@ const ProfilePage = ({ userData, setUserData }: ProfilePageProps) => {
 
 // --- AUTH & REGISTRATION FLOW ---
 
-const WelcomeScreen = ({ onNavigate }: { onNavigate: (target: 'signup' | 'login') => void }) => {
+const WelcomeScreen = ({ onNavigate }: { onNavigate: (target: 'signup' | 'login' | 'terms' | 'privacy') => void }) => {
     return (
         <div className="min-h-screen w-full flex flex-col items-center justify-center bg-gray-900 p-4 animated-gradient bg-gradient-to-br from-gray-900 via-purple-900/50 to-gray-900">
             <div className="text-center mb-12 fade-in">
@@ -555,7 +557,7 @@ const WelcomeScreen = ({ onNavigate }: { onNavigate: (target: 'signup' | 'login'
                 </button>
             </div>
              <div className="mt-8 text-xs text-gray-500 text-center fade-in" style={{ animationDelay: '0.4s' }}>
-                Al continuar, aceptas nuestros <a href="#" className="underline text-cyan-400">Términos</a> y <a href="#" className="underline text-cyan-400">Política de Privacidad</a>.
+                Al continuar, aceptas nuestros <button onClick={() => onNavigate('terms')} className="underline text-cyan-400 bg-transparent border-none p-0 cursor-pointer hover:text-cyan-300">Términos</button> y <button onClick={() => onNavigate('privacy')} className="underline text-cyan-400 bg-transparent border-none p-0 cursor-pointer hover:text-cyan-300">Política de Privacidad</button>.
             </div>
         </div>
     );
@@ -771,7 +773,7 @@ const App = () => {
         userData: UserData | null;
     }>({ isLoading: true, authUser: null, userData: null });
 
-    const [page, setPage] = useState<'welcome' | 'login' | 'signup'>('welcome');
+    const [page, setPage] = useState<'welcome' | 'login' | 'signup' | 'terms' | 'privacy'>('welcome');
 
     useEffect(() => {
         const unsubscribe = onAuthChange(async (user) => {
@@ -805,6 +807,10 @@ const App = () => {
                 return <AuthForm title="Iniciar Sesión" buttonText="Entrar" onAuth={signInWithEmail} onGoogleSignIn={signInWithGoogle} onNavigate={() => setPage('signup')} />;
             case 'signup':
                 return <AuthForm title="Crear Cuenta" buttonText="Registrarse" onAuth={signUpWithEmail} onGoogleSignIn={signInWithGoogle} isSignUp onNavigate={() => setPage('login')} />;
+            case 'terms':
+                return <TermsOfServicePage onBack={() => setPage('welcome')} />;
+            case 'privacy':
+                return <PrivacyPolicyPage onBack={() => setPage('welcome')} />;
             case 'welcome':
             default:
                 return <WelcomeScreen onNavigate={(target) => setPage(target)} />;
