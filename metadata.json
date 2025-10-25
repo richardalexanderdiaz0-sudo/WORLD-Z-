@@ -1,0 +1,7 @@
+{
+  "name": "Z-App: A New Social Experience",
+  "description": "A social application designed for Gen Z with a focus on safety, emotional well-being, and genuine connection.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
