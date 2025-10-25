@@ -1,0 +1,21 @@
+{
+  "name": "Z-App",
+  "short_name": "Z-App",
+  "description": "A social application designed for Gen Z with a focus on safety, emotional well-being, and genuine connection.",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827"
+}
