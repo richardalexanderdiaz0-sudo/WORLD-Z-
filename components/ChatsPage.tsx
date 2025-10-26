@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getChatsForUser, getMessagesForChat, sendMessage, Chat, Message } from '../services/firebaseService';
+import { getChatsForUser, getMessagesForChat, sendMessage, Chat, Message, ChatRequest, getChatRequestsForUser, respondToChatRequest } from '../services/firebaseService';
 
 // --- SVG ICONS ---
 const BackIcon = () => (
@@ -94,22 +94,36 @@ const ChatScreen = ({ chatId, otherUserName, currentUser, onBack }: ChatScreenPr
 
 // --- CHAT LIST SCREEN ---
 interface ChatsListScreenProps {
-    currentUser: { id: string };
+    currentUser: { id: string; username: string; };
     onSelectChat: (chatId: string, otherUserName: string) => void;
 }
 
 const ChatsListScreen = ({ currentUser, onSelectChat }: ChatsListScreenProps) => {
     const [chats, setChats] = useState<Chat[]>([]);
+    const [requests, setRequests] = useState<ChatRequest[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
         if (!currentUser.id) return;
-        const unsubscribe = getChatsForUser(currentUser.id, (fetchedChats) => {
+        const unsubscribeChats = getChatsForUser(currentUser.id, (fetchedChats) => {
             setChats(fetchedChats);
             setIsLoading(false);
         });
-        return () => unsubscribe();
+        const unsubscribeRequests = getChatRequestsForUser(currentUser.id, (fetchedRequests) => {
+            setRequests(fetchedRequests);
+        });
+        return () => {
+            unsubscribeChats();
+            unsubscribeRequests();
+        };
     }, [currentUser.id]);
+
+    const handleRespond = async (request: ChatRequest, response: 'accepted' | 'declined') => {
+        const result = await respondToChatRequest(request, currentUser, response);
+        if (result.success && response === 'accepted' && result.chatId) {
+            onSelectChat(result.chatId, request.senderUsername);
+        }
+    };
 
     const getOtherParticipant = (chat: Chat) => {
         return chat.participantsInfo.find(p => p.userId !== currentUser.id);
@@ -121,9 +135,31 @@ const ChatsListScreen = ({ currentUser, onSelectChat }: ChatsListScreenProps) =>
                 <h1 className="text-3xl font-bold text-pink-400">Chats</h1>
             </header>
             <div className="flex-grow overflow-y-auto">
+                {requests.length > 0 && (
+                    <div className="border-b border-gray-800">
+                        <h2 className="p-4 text-sm font-semibold text-gray-400">Solicitudes de Chat</h2>
+                        {requests.map(req => (
+                            <div key={req.id} className="p-4 border-t border-gray-800">
+                                <div className="flex items-center mb-2">
+                                    <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-lg font-bold mr-3 flex-shrink-0">
+                                        {req.senderUsername.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div>
+                                        <p className="font-semibold text-white">{req.senderUsername}</p>
+                                        <p className="text-sm text-gray-300 italic">"{req.message}"</p>
+                                    </div>
+                                </div>
+                                <div className="flex justify-end space-x-3 mt-2">
+                                    <button onClick={() => handleRespond(req, 'declined')} className="px-4 py-1 text-sm bg-gray-600 rounded-full text-white hover:bg-gray-700">Rechazar</button>
+                                    <button onClick={() => handleRespond(req, 'accepted')} className="px-4 py-1 text-sm bg-cyan-500 rounded-full text-white hover:bg-cyan-600">Aceptar</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
                 {isLoading ? (
                     <div className="p-4 text-center text-gray-400">Cargando tus chats...</div>
-                ) : chats.length === 0 ? (
+                ) : chats.length === 0 && requests.length === 0 ? (
                     <div className="p-8 text-center text-gray-500">
                         <p>No tienes conversaciones.</p>
                         <p className="text-sm mt-2">Inicia una conversación enviando un mensaje desde una publicación en el feed.</p>
@@ -159,7 +195,7 @@ const ChatsListScreen = ({ currentUser, onSelectChat }: ChatsListScreenProps) =>
 
 // --- MAIN CHATS PAGE ---
 interface ChatsPageProps {
-    userData: { id?: string; };
+    userData: { id?: string; username?: string; };
     chatToOpen: { chatId: string; otherUserName: string } | null;
     onChatOpened: () => void;
 }
@@ -174,11 +210,11 @@ const ChatsPage: React.FC<ChatsPageProps> = ({ userData, chatToOpen, onChatOpene
         }
     }, [chatToOpen, onChatOpened]);
 
-    if (!userData.id) {
+    if (!userData.id || !userData.username) {
         return <div className="flex-grow flex items-center justify-center text-gray-500">Error: Usuario no identificado.</div>;
     }
 
-    const currentUser = { id: userData.id };
+    const currentUser = { id: userData.id, username: userData.username };
 
     return (
         <div className="flex-grow flex flex-col h-full">

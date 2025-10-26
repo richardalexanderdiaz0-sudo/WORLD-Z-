@@ -18,11 +18,21 @@ import {
     getCommentsForPost,
     addCommentToPost,
     Comment,
+    toggleLikePost,
+    getPostById,
+    getNotificationsForUser,
+    Notification,
+    markNotificationAsRead,
+    toggleFollowUser,
+    sendChatRequest
 } from './services/firebaseService';
+import { checkForHateSpeech } from './services/geminiService';
 import Discover from './components/Discover';
 import ChatsPage from './components/ChatsPage';
 import TermsOfServicePage from './components/TermsOfServicePage';
 import PrivacyPolicyPage from './components/PrivacyPolicyPage';
+import { formatDistanceToNow } from 'date-fns';
+import { es } from 'date-fns/locale';
 
 // --- HELPER & MOCK DATA ---
 const ORIENTATION_MESSAGES = {
@@ -48,6 +58,28 @@ const INTEREST_OPTIONS = [
 ];
 
 // --- SVG ICONS ---
+
+const Logo = ({ className }: { className?: string }) => (
+    <svg viewBox="0 0 100 100" className={className} xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style={{ stopColor: 'rgb(34, 211, 238)', stopOpacity: 1 }} />
+                <stop offset="50%" style={{ stopColor: 'rgb(192, 132, 252)', stopOpacity: 1 }} />
+                <stop offset="100%" style={{ stopColor: 'rgb(236, 72, 153)', stopOpacity: 1 }} />
+            </linearGradient>
+        </defs>
+        <path
+            d="M 85,15 H 15 L 85,85 H 15"
+            stroke="url(#logoGradient)"
+            strokeWidth="18"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+        />
+    </svg>
+);
+
+
 const HomeIcon = ({ active }: { active: boolean }) => (
     <svg className={`w-7 h-7 transition-all ${active ? 'text-cyan-400 scale-110' : 'text-gray-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
 );
@@ -73,6 +105,9 @@ const CameraIcon = () => (
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
     </svg>
+);
+const BackIcon = () => (
+    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
 );
 const AnimatedCheckmark = () => (
     <svg className="w-6 h-6 text-cyan-400" viewBox="0 0 24 24">
@@ -104,6 +139,11 @@ const CommentIcon = () => (
         <path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
     </svg>
 );
+const FlagIcon = () => (
+    <svg className="w-10 h-10 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6H8.5l-1-1H5a2 2 0 00-2 2zm9-13.5V9" />
+    </svg>
+);
 
 
 // --- TYPE DEFINITIONS ---
@@ -115,6 +155,8 @@ export interface UserData {
     orientation: string;
     interests: string[];
     profilePic?: string;
+    followers?: string[];
+    following?: string[];
 }
 
 // --- MAIN APP PAGES ---
@@ -131,10 +173,13 @@ interface CommentsModalProps {
     onClose: () => void;
     onCommentAdded: () => void;
     postId: string;
+    postAuthorId: string;
+    postTextContent: string;
     currentUserData: UserData;
+    onViewProfile: (userId: string) => void;
 }
 
-const CommentsModal: React.FC<CommentsModalProps> = ({ isOpen, onClose, onCommentAdded, postId, currentUserData }) => {
+const CommentsModal: React.FC<CommentsModalProps> = ({ isOpen, onClose, onCommentAdded, postId, postAuthorId, postTextContent, currentUserData, onViewProfile }) => {
     const [comments, setComments] = useState<Comment[]>([]);
     const [newCommentText, setNewCommentText] = useState('');
     const [isLoading, setIsLoading] = useState(true);
@@ -165,6 +210,12 @@ const CommentsModal: React.FC<CommentsModalProps> = ({ isOpen, onClose, onCommen
     useEffect(() => {
         commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [comments]);
+    
+    const handleViewProfile = (userId: string) => {
+        if (userId === currentUserData.id) return;
+        onClose();
+        onViewProfile(userId);
+    };
 
     const handleSubmitComment = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -180,7 +231,7 @@ const CommentsModal: React.FC<CommentsModalProps> = ({ isOpen, onClose, onCommen
         };
 
         try {
-            const result = await addCommentToPost(postId, commentData);
+            const result = await addCommentToPost(postId, commentData, postAuthorId, postTextContent);
             if (result.success && result.newComment) {
                 setComments(prev => [...prev, result.newComment!]);
                 setNewCommentText('');
@@ -218,11 +269,15 @@ const CommentsModal: React.FC<CommentsModalProps> = ({ isOpen, onClose, onCommen
                         <div className="space-y-4">
                             {comments.map(comment => (
                                 <div key={comment.id} className="flex items-start space-x-3">
-                                    <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center text-sm font-bold flex-shrink-0">
-                                        {comment.authorUsername ? comment.authorUsername.charAt(0).toUpperCase() : '?'}
-                                    </div>
+                                    <button onClick={() => handleViewProfile(comment.authorId)} className="flex-shrink-0 focus:outline-none" disabled={comment.authorId === currentUserData.id}>
+                                        <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center text-sm font-bold flex-shrink-0">
+                                            {comment.authorUsername ? comment.authorUsername.charAt(0).toUpperCase() : '?'}
+                                        </div>
+                                    </button>
                                     <div className="flex-1 bg-gray-700 rounded-lg p-2">
-                                        <p className="font-semibold text-white text-sm">{comment.authorUsername || 'Usuario'}</p>
+                                        <button onClick={() => handleViewProfile(comment.authorId)} className="font-semibold text-white text-sm hover:underline focus:outline-none" disabled={comment.authorId === currentUserData.id}>
+                                            {comment.authorUsername || 'Usuario'}
+                                        </button>
                                         <p className="text-gray-300">{comment.textContent}</p>
                                     </div>
                                 </div>
@@ -258,20 +313,31 @@ const CommentsModal: React.FC<CommentsModalProps> = ({ isOpen, onClose, onCommen
 interface PostCardProps {
     post: Post;
     userData: UserData;
-    onStartChat: (otherUser: { id: string; username: string }) => void;
+    onViewProfile: (userId: string) => void;
+    onPostUpdated: (updatedPost: Post) => void;
 }
 
-const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
+const PostCard: React.FC<PostCardProps> = ({ post, userData, onViewProfile, onPostUpdated }) => {
     const isCurrentUserPost = userData && post.authorId === userData.id;
-    const [isLiked, setIsLiked] = useState(false);
-    const [likeCount, setLikeCount] = useState(post.likes || 0);
     const [isCommentsModalOpen, setIsCommentsModalOpen] = useState(false);
     const [commentCount, setCommentCount] = useState(post.commentCount || 0);
 
-    const handleLike = () => {
-        setIsLiked(!isLiked);
-        setLikeCount(prev => isLiked ? prev - 1 : prev + 1);
-        // In a real app, this would also trigger a backend update.
+    const handleLike = async () => {
+        if (!userData || !userData.id || !post.id) return;
+    
+        const isCurrentlyLiked = post.likedBy?.includes(userData.id) || false;
+        
+        // Optimistic update
+        const updatedPost = {
+            ...post,
+            likedBy: isCurrentlyLiked 
+                ? post.likedBy?.filter(id => id !== userData.id) 
+                : [...(post.likedBy || []), userData.id],
+            likes: (post.likes || 0) + (isCurrentlyLiked ? -1 : 1)
+        };
+        onPostUpdated(updatedPost);
+    
+        await toggleLikePost(post.id, post.authorId, userData.id, userData.username, post.textContent);
     };
     
     const handleCommentAdded = () => {
@@ -300,12 +366,29 @@ const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
             alert('¡La funcionalidad de compartir llegará pronto!');
         }
     };
+    
+    const handleViewProfile = () => {
+        if (!isCurrentUserPost) {
+            onViewProfile(post.authorId);
+        }
+    };
 
+    if (post.isHateSpeech) {
+        return (
+            <div className="bg-gray-800 rounded-xl shadow-lg p-6 soft-glow w-full max-w-lg mx-auto flex flex-col items-center justify-center text-center">
+                <FlagIcon />
+                <p className="text-gray-400 mt-4 font-semibold">Esta publicación no está disponible.</p>
+                <p className="text-gray-500 text-sm">No cumplió las normas de la comunidad.</p>
+            </div>
+        );
+    }
+
+    const isLiked = post.likedBy?.includes(userData.id) || false;
 
     return (
         <div className="bg-gray-800 rounded-xl shadow-lg p-4 soft-glow w-full max-w-lg mx-auto flex flex-col">
             <div className="flex items-center justify-between">
-                <div className="flex items-center">
+                 <button onClick={handleViewProfile} className="flex items-center text-left focus:outline-none" disabled={isCurrentUserPost}>
                     <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-lg font-bold mr-3">
                         {post.authorUsername ? post.authorUsername.charAt(0).toUpperCase() : '?'}
                     </div>
@@ -313,18 +396,9 @@ const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
                         <p className="font-semibold text-white">{post.authorUsername}</p>
                         <p className="text-gray-500 text-xs">{formattedDate}</p>
                     </div>
-                </div>
+                </button>
                 <div className="flex items-center space-x-2">
-                    {!isCurrentUserPost && (
-                        <button 
-                            onClick={() => onStartChat({ id: post.authorId, username: post.authorUsername })}
-                            className="p-2 rounded-full hover:bg-gray-700 transition"
-                            aria-label={`Enviar mensaje a ${post.authorUsername}`}
-                        >
-                            <svg className="w-6 h-6 text-pink-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a2 2 0 01-2-2V7a2 2 0 012-2h4M5 8h2m4 0h2" /></svg>
-                        </button>
-                    )}
-                    <button
+                     <button
                         onClick={handleShare}
                         className="p-2 rounded-full hover:bg-gray-700 transition"
                         aria-label="Compartir publicación"
@@ -346,7 +420,7 @@ const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
              <div className="flex items-center space-x-6 mt-4 pt-4 border-t border-gray-700/50">
                 <button onClick={handleLike} className="flex items-center space-x-1.5 text-gray-400 group focus:outline-none">
                     <LikeIcon liked={isLiked} />
-                    <span className="font-medium text-sm transition-colors group-hover:text-red-500">{likeCount}</span>
+                    <span className="font-medium text-sm transition-colors group-hover:text-red-500">{post.likes || 0}</span>
                 </button>
                 <button onClick={() => setIsCommentsModalOpen(true)} className="flex items-center space-x-1.5 text-gray-400 group focus:outline-none">
                     <CommentIcon />
@@ -358,8 +432,11 @@ const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
                     isOpen={isCommentsModalOpen}
                     onClose={() => setIsCommentsModalOpen(false)}
                     postId={post.id}
+                    postAuthorId={post.authorId}
+                    postTextContent={post.textContent}
                     currentUserData={userData}
                     onCommentAdded={handleCommentAdded}
+                    onViewProfile={onViewProfile}
                 />
             )}
         </div>
@@ -421,6 +498,9 @@ const CreatePostModal = ({ isOpen, onClose, onPostCreated, userData }: CreatePos
         setError(null);
 
         try {
+            // AI Content Moderation Check
+            const isHarmful = await checkForHateSpeech(textContent);
+            
             let mediaUrl: string | undefined = undefined;
             if (mediaFile && mediaType) {
                 mediaUrl = await uploadMediaToStorage(mediaFile, userData.id, mediaType);
@@ -430,12 +510,13 @@ const CreatePostModal = ({ isOpen, onClose, onPostCreated, userData }: CreatePos
                 authorId: userData.id,
                 authorUsername: userData.username,
                 textContent: textContent,
+                isHateSpeech: isHarmful, // Set the flag from AI check
                 ...(mediaUrl && mediaType && { mediaUrl: mediaUrl, mediaType: mediaType }),
             };
 
             const result = await createPost(newPost);
             if (result.success && result.id) {
-                onPostCreated({ ...newPost, id: result.id, createdAt: new Date(), likes: 0, commentCount: 0 });
+                onPostCreated({ ...newPost, id: result.id, createdAt: new Date(), likes: 0, commentCount: 0, likedBy: [] });
                 onClose();
             } else {
                 setError(result.error?.message || 'Error al crear la publicación.');
@@ -498,7 +579,10 @@ const CreatePostModal = ({ isOpen, onClose, onPostCreated, userData }: CreatePos
 };
 
 
-const HomeFeed = ({ userData, onStartChat }: { userData: UserData, onStartChat: (otherUser: { id: string; username: string }) => void }) => {
+const HomeFeed = ({ userData, onViewProfile }: { 
+    userData: UserData, 
+    onViewProfile: (userId: string) => void,
+}) => {
     const [posts, setPosts] = useState<Post[]>([]);
     const [loadingPosts, setLoadingPosts] = useState(true);
     const [errorPosts, setErrorPosts] = useState<string | null>(null);
@@ -524,6 +608,12 @@ const HomeFeed = ({ userData, onStartChat }: { userData: UserData, onStartChat: 
     const handlePostCreated = (newPost: Post) => {
         setPosts((prevPosts) => [newPost, ...prevPosts]);
     };
+    
+    const handlePostUpdated = (updatedPost: Post) => {
+        setPosts(currentPosts => 
+            currentPosts.map(p => p.id === updatedPost.id ? updatedPost : p)
+        );
+    };
 
     return (
         <div className="flex-grow flex flex-col items-center p-4 bg-gray-900 overflow-y-auto relative">
@@ -535,7 +625,7 @@ const HomeFeed = ({ userData, onStartChat }: { userData: UserData, onStartChat: 
             : (
                 <div className="w-full max-w-lg space-y-4 pb-4">
                     {posts.map(post => (
-                        <PostCard key={post.id} post={post} userData={userData} onStartChat={onStartChat} />
+                        <PostCard key={post.id} post={post} userData={userData} onViewProfile={onViewProfile} onPostUpdated={handlePostUpdated} />
                     ))}
                 </div>
             )}
@@ -660,29 +750,410 @@ const ProfilePage = ({ userData, setUserData }: ProfilePageProps) => {
     );
 };
 
+// --- CHAT REQUEST MODAL ---
+interface ChatRequestModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    onSend: (message: string) => Promise<void>;
+    otherUsername: string;
+}
+
+const ChatRequestModal: React.FC<ChatRequestModalProps> = ({ isOpen, onClose, onSend, otherUsername }) => {
+    const [message, setMessage] = useState('');
+    const [isSending, setIsSending] = useState(false);
+    const [isSent, setIsSent] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (isOpen) {
+            setMessage('');
+            setIsSending(false);
+            setIsSent(false);
+            setError('');
+        }
+    }, [isOpen]);
+
+    const handleSend = async () => {
+        if (!message.trim()) return;
+        setIsSending(true);
+        setError('');
+        try {
+            await onSend(message);
+            setIsSent(true);
+            setTimeout(() => {
+                onClose();
+            }, 2000); // Close after 2 seconds
+        } catch (e: any) {
+            setError('No se pudo enviar la solicitud. Inténtalo de nuevo.');
+            setIsSending(false);
+        }
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}>
+            <div className="bg-gray-800 rounded-xl p-6 w-full max-w-sm shadow-lg soft-glow relative pop-in" onClick={(e) => e.stopPropagation()}>
+                {isSent ? (
+                    <div className="text-center">
+                        <svg className="w-16 h-16 text-green-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        <h2 className="text-xl font-bold text-white mt-4">Solicitud Enviada</h2>
+                        <p className="text-gray-400">Tu solicitud de chat ha sido enviada a {otherUsername}.</p>
+                    </div>
+                ) : (
+                    <>
+                        <h2 className="text-xl font-bold text-cyan-400 mb-4">Enviar Solicitud de Chat a {otherUsername}</h2>
+                        <p className="text-sm text-gray-400 mb-4">Envía un mensaje para iniciar la conversación.</p>
+                        <textarea
+                            className="w-full h-24 bg-gray-700 border border-gray-600 rounded-lg p-3 text-white placeholder-gray-400 focus:outline-none focus:border-cyan-500 resize-none"
+                            placeholder="Escribe tu mensaje aquí..."
+                            value={message}
+                            onChange={(e) => setMessage(e.target.value)}
+                            maxLength={80}
+                            disabled={isSending}
+                        ></textarea>
+                        <p className="text-right text-xs text-gray-500 mt-1">{message.length}/80</p>
+                        {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
+                        <div className="mt-6 flex justify-end space-x-4">
+                            <button onClick={onClose} className="px-6 py-2 bg-gray-600 text-white rounded-full hover:bg-gray-700 transition" disabled={isSending}>Cancelar</button>
+                            <button onClick={handleSend} className="px-6 py-2 bg-cyan-500 text-white rounded-full hover:bg-cyan-600 transition disabled:opacity-50" disabled={isSending || !message.trim()}>
+                                {isSending ? 'Enviando...' : 'Enviar'}
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+
+// --- USER PROFILE VIEW ---
+interface UserProfileViewProps {
+    userId: string;
+    currentUserData: UserData;
+    onBack: () => void;
+}
+
+const UserProfileView = ({ userId, currentUserData, onBack }: UserProfileViewProps) => {
+    const [profile, setProfile] = useState<UserData | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [isFollowing, setIsFollowing] = useState(false);
+    const [isChatRequestModalOpen, setIsChatRequestModalOpen] = useState(false);
+
+    useEffect(() => {
+        const fetchProfile = async () => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                const userProfile = await getUserProfile(userId);
+                if (userProfile) {
+                    setProfile(userProfile);
+                    if (currentUserData.following?.includes(userId)) {
+                        setIsFollowing(true);
+                    }
+                } else {
+                    setError("No se pudo encontrar este perfil.");
+                }
+            } catch (e) {
+                setError("Error al cargar el perfil.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchProfile();
+    }, [userId, currentUserData.following]);
+    
+    const handleFollowToggle = async () => {
+        if (!currentUserData.id || !currentUserData.username) return;
+
+        const originalIsFollowing = isFollowing;
+        setIsFollowing(prev => !prev);
+
+        setProfile(p => {
+            if (!p) return null;
+            const currentFollowers = p.followers || [];
+            return {
+                ...p,
+                followers: originalIsFollowing
+                    ? currentFollowers.filter(id => id !== currentUserData.id)
+                    : [...currentFollowers, currentUserData.id!],
+            };
+        });
+
+        await toggleFollowUser(currentUserData.id, currentUserData.username, userId);
+    };
+
+    const handleSendChatRequest = async (message: string) => {
+        if (!currentUserData.id || !currentUserData.username) throw new Error("User not logged in.");
+        await sendChatRequest({ id: currentUserData.id, username: currentUserData.username }, userId, message);
+    };
+
+    if (isLoading) {
+        return <div className="min-h-screen w-full flex items-center justify-center bg-gray-900 text-gray-400">Cargando perfil...</div>;
+    }
+    
+    if (error || !profile) {
+        return (
+             <div className="min-h-screen w-full flex flex-col items-center justify-center bg-gray-900 text-gray-400 p-4">
+                <p className="text-red-400">{error || "Perfil no encontrado."}</p>
+                <button onClick={onBack} className="mt-4 px-4 py-2 bg-cyan-500 text-white rounded-full">Volver</button>
+            </div>
+        );
+    }
+
+    const followersCount = profile.followers?.length || 0;
+    const followingCount = profile.following?.length || 0;
+
+    return (
+        <div className="h-screen w-screen flex flex-col bg-gray-900">
+            <header className="flex items-center p-4 bg-gray-800/80 backdrop-blur-lg border-b border-gray-700">
+                <button onClick={onBack} className="p-2 rounded-full hover:bg-gray-700">
+                    <BackIcon />
+                </button>
+                <h2 className="text-xl font-bold ml-4">{profile.username}</h2>
+            </header>
+            <div className="flex-grow flex flex-col items-center p-4 bg-gray-900 overflow-y-auto">
+                <div className="w-full max-w-md bg-gray-800 rounded-xl p-6 shadow-lg soft-glow">
+                    <div className="flex flex-col items-center mb-6">
+                        <div className="w-32 h-32 rounded-full overflow-hidden bg-gray-700 border-4 border-purple-500 flex items-center justify-center">
+                            {profile.profilePic ? (
+                                <img src={profile.profilePic} alt="Profile" className="w-full h-full object-cover" />
+                            ) : (
+                                <span className="text-5xl font-bold text-white">{profile.username?.charAt(0).toUpperCase()}</span>
+                            )}
+                        </div>
+                        <h2 className="text-2xl font-bold text-white mt-4">{profile.username}</h2>
+                        <p className="text-md text-gray-400">{profile.name}</p>
+                    </div>
+                     <div className="flex justify-around text-center my-6">
+                        <div>
+                            <p className="text-xl font-bold">{followersCount}</p>
+                            <p className="text-sm text-gray-400">Seguidores</p>
+                        </div>
+                        <div>
+                            <p className="text-xl font-bold">{followingCount}</p>
+                            <p className="text-sm text-gray-400">Siguiendo</p>
+                        </div>
+                    </div>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-gray-400 text-sm font-semibold mb-1">Intereses</label>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                                {profile.interests.map(interest => (
+                                    <span key={interest} className="px-3 py-1 bg-blue-600 rounded-full text-sm text-white">{interest}</span>
+                                ))}
+                                {profile.interests.length === 0 && <span className="text-gray-500 text-sm">No hay intereses seleccionados.</span>}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="mt-8 flex justify-center space-x-4">
+                        <button onClick={handleFollowToggle} className={`w-1/2 text-md font-bold py-2 rounded-full transition-colors ${isFollowing ? 'bg-gray-600 text-white' : 'bg-cyan-500 text-white'}`}>
+                            {isFollowing ? 'Siguiendo' : 'Seguir'}
+                        </button>
+                        <button onClick={() => setIsChatRequestModalOpen(true)} className="w-1/2 text-md font-bold py-2 rounded-full bg-purple-600 text-white transition-colors hover:bg-purple-700">
+                             Enviar Mensaje
+                         </button>
+                    </div>
+                </div>
+            </div>
+            <ChatRequestModal 
+                isOpen={isChatRequestModalOpen}
+                onClose={() => setIsChatRequestModalOpen(false)}
+                onSend={handleSendChatRequest}
+                otherUsername={profile.username}
+            />
+        </div>
+    );
+};
+
+// --- SINGLE POST VIEW ---
+interface SinglePostViewProps {
+    postId: string;
+    userData: UserData;
+    onBack: () => void;
+    onViewProfile: (userId: string) => void;
+}
+
+const SinglePostView = ({ postId, userData, onBack, onViewProfile }: SinglePostViewProps) => {
+    const [post, setPost] = useState<Post | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const fetchPost = async () => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                const fetchedPost = await getPostById(postId);
+                if (fetchedPost) {
+                    setPost(fetchedPost);
+                } else {
+                    setError("No se pudo encontrar la publicación.");
+                }
+            } catch (e) {
+                setError("Error al cargar la publicación.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchPost();
+    }, [postId]);
+
+    const handlePostUpdated = (updatedPost: Post) => {
+        setPost(updatedPost);
+    };
+
+    if (isLoading) {
+        return <div className="min-h-screen w-full flex items-center justify-center bg-gray-900 text-gray-400">Cargando publicación...</div>;
+    }
+
+    if (error || !post) {
+        return (
+            <div className="min-h-screen w-full flex flex-col items-center justify-center bg-gray-900 text-gray-400 p-4">
+                <p className="text-red-400">{error || "Publicación no encontrada."}</p>
+                <button onClick={onBack} className="mt-4 px-4 py-2 bg-cyan-500 text-white rounded-full">Volver</button>
+            </div>
+        );
+    }
+
+    return (
+        <div className="h-screen w-screen flex flex-col bg-gray-900">
+            <header className="flex items-center p-4 bg-gray-800/80 backdrop-blur-lg border-b border-gray-700">
+                <button onClick={onBack} className="p-2 rounded-full hover:bg-gray-700">
+                    <BackIcon />
+                </button>
+                <h2 className="text-xl font-bold ml-4">Publicación</h2>
+            </header>
+            <main className="flex-grow p-4 overflow-y-auto flex items-start justify-center">
+                <PostCard post={post} userData={userData} onViewProfile={onViewProfile} onPostUpdated={handlePostUpdated} />
+            </main>
+        </div>
+    );
+};
+
+// --- ACTIVITY PAGE ---
+interface ActivityPageProps {
+    userData: UserData;
+    onViewPost: (postId: string) => void;
+    onViewProfile: (userId: string) => void;
+}
+
+const ActivityPage: React.FC<ActivityPageProps> = ({ userData, onViewPost, onViewProfile }) => {
+    const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        if (!userData.id) return;
+        const unsubscribe = getNotificationsForUser(userData.id, (fetchedNotifications) => {
+            setNotifications(fetchedNotifications);
+            setIsLoading(false);
+        });
+        return () => unsubscribe();
+    }, [userData.id]);
+
+    const handleNotificationClick = async (notification: Notification) => {
+        if (notification.postId) {
+            onViewPost(notification.postId);
+        }
+        if (!notification.read && notification.id) {
+            await markNotificationAsRead(notification.id);
+        }
+    };
+
+    return (
+        <div className="flex-grow flex flex-col bg-gray-900">
+            <header className="p-4 border-b border-gray-700">
+                <h1 className="text-3xl font-bold text-yellow-400">Actividad</h1>
+            </header>
+            <main className="flex-grow overflow-y-auto">
+                {isLoading ? (
+                    <p className="text-gray-400 text-center p-8">Cargando actividad...</p>
+                ) : notifications.length === 0 ? (
+                    <p className="text-gray-500 text-center p-8">Cuando alguien interactúe contigo, lo verás aquí.</p>
+                ) : (
+                    <div className="divide-y divide-gray-800">
+                        {notifications.map(notif => {
+                            if (!notif.createdAt?.toDate) return null;
+                            const timeAgo = formatDistanceToNow(notif.createdAt.toDate(), { addSuffix: true, locale: es });
+                            const message = notif.type === 'like'
+                                ? <>le ha dado me gusta a tu publicación: <span className="italic text-gray-400">"{notif.postContentPreview}..."</span></>
+                                : notif.type === 'comment' 
+                                ? <>ha comentado en tu publicación: <span className="italic text-gray-400">"{notif.commentText}"</span></>
+                                : notif.type === 'follow'
+                                ? <>ha comenzado a seguirte.</>
+                                : notif.type === 'chat_request_accepted'
+                                ? <>ha aceptado tu solicitud de chat.</>
+                                : null;
+                            
+                            if (!message) return null;
+
+                             const isClickable = !!notif.postId;
+
+                            return (
+                                <button key={notif.id} onClick={() => handleNotificationClick(notif)} disabled={!isClickable} className={`w-full text-left flex items-start p-4 transition-colors ${isClickable ? 'hover:bg-gray-800' : 'cursor-default'} ${!notif.read ? 'bg-cyan-900/20' : ''}`}>
+                                    <div onClick={(e) => { e.stopPropagation(); onViewProfile(notif.actorId); }} className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-lg font-bold mr-4 flex-shrink-0 cursor-pointer">
+                                        {notif.actorUsername.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-gray-300">
+                                            <strong onClick={(e) => { e.stopPropagation(); onViewProfile(notif.actorId); }} className="text-white hover:underline cursor-pointer">{notif.actorUsername}</strong> {message}
+                                        </p>
+                                        <p className="text-sm text-cyan-400 mt-1">{timeAgo}</p>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
+            </main>
+        </div>
+    );
+};
+
 
 // --- AUTH & REGISTRATION FLOW ---
 
 const WelcomeScreen = ({ onNavigate }: { onNavigate: (target: 'signup' | 'login' | 'terms' | 'privacy') => void }) => {
+    const [showForm, setShowForm] = useState(false);
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setShowForm(true);
+        }, 2500); // Wait 2.5s before starting the transition
+
+        return () => clearTimeout(timer);
+    }, []);
+
     return (
-        <div className="min-h-screen w-full flex flex-col items-center justify-center bg-gray-900 p-4 animated-gradient bg-gradient-to-br from-gray-900 via-purple-900/50 to-gray-900">
-            <div className="text-center mb-12 fade-in">
-                <h1 className="text-6xl font-extrabold text-white">
-                    <span className="bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-pink-500">Z</span>
-                </h1>
-                <h2 className="text-3xl font-bold text-white mt-2">Bienvenido/a/e</h2>
-                <p className="text-gray-400 mt-2">Tu espacio seguro para conectar.</p>
+        <div className="relative min-h-screen w-full flex flex-col items-center justify-center bg-gray-900 p-4 animated-gradient bg-gradient-to-br from-gray-900 via-purple-900/50 to-gray-900 overflow-hidden">
+            {/* Animated Welcome Message */}
+            <div className={`absolute inset-0 flex flex-col items-center justify-center text-center transition-all duration-700 ease-in-out ${showForm ? 'opacity-0 -translate-y-8' : 'opacity-100 translate-y-0'}`}>
+                <div className="pop-in flex flex-col items-center">
+                    <Logo className="w-40 h-40 md:w-48 md:h-48" />
+                    <p className="text-xl md:text-2xl text-gray-300 mt-4 tracking-wider">Conecta. Comparte. Sé tú.</p>
+                </div>
             </div>
-            <div className="w-full max-w-sm space-y-4 fade-in" style={{ animationDelay: '0.2s' }}>
-                 <button onClick={() => onNavigate('signup')} className="w-full text-lg font-bold py-3 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 text-white transform hover:scale-105 transition-transform">
-                    Crear Cuenta
-                </button>
-                <button onClick={() => onNavigate('login')} className="w-full text-lg font-bold py-3 rounded-full bg-gray-700 text-white transform hover:scale-105 transition-transform">
-                    Iniciar Sesión
-                </button>
-            </div>
-             <div className="mt-8 text-xs text-gray-500 text-center fade-in" style={{ animationDelay: '0.4s' }}>
-                Al continuar, aceptas nuestros <button onClick={() => onNavigate('terms')} className="underline text-cyan-400 bg-transparent border-none p-0 cursor-pointer hover:text-cyan-300">Términos</button> y <button onClick={() => onNavigate('privacy')} className="underline text-cyan-400 bg-transparent border-none p-0 cursor-pointer hover:text-cyan-300">Política de Privacidad</button>.
+
+            {/* Login/Signup Form */}
+            <div className={`w-full max-w-sm flex flex-col items-center justify-center transition-all duration-700 ease-in-out ${showForm ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+                 <div className="text-center mb-12">
+                    <Logo className="w-24 h-24 mx-auto" />
+                    <h2 className="text-3xl font-bold text-white mt-2">Bienvenido/a/e</h2>
+                    <p className="text-gray-400 mt-2">Tu espacio seguro para conectar.</p>
+                </div>
+                <div className="w-full max-w-sm space-y-4">
+                     <button onClick={() => onNavigate('signup')} className="w-full text-lg font-bold py-3 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 text-white transform hover:scale-105 transition-transform">
+                        Crear Cuenta
+                    </button>
+                    <button onClick={() => onNavigate('login')} className="w-full text-lg font-bold py-3 rounded-full bg-gray-700 text-white transform hover:scale-105 transition-transform">
+                        Iniciar Sesión
+                    </button>
+                </div>
+                 <div className="mt-8 text-xs text-gray-500 text-center">
+                    Al continuar, aceptas nuestros <button onClick={() => onNavigate('terms')} className="underline text-cyan-400 bg-transparent border-none p-0 cursor-pointer hover:text-cyan-300">Términos</button> y <button onClick={() => onNavigate('privacy')} className="underline text-cyan-400 bg-transparent border-none p-0 cursor-pointer hover:text-cyan-300">Política de Privacidad</button>.
+                </div>
             </div>
         </div>
     );
@@ -699,6 +1170,7 @@ const AuthForm = ({ title, buttonText, onAuth, isSignUp, onNavigate, onGoogleSig
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [isGoogleLoading, setIsGoogleLoading] = useState(false);
     const [error, setError] = useState('');
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -716,22 +1188,20 @@ const AuthForm = ({ title, buttonText, onAuth, isSignUp, onNavigate, onGoogleSig
     
     const handleGoogleClick = async () => {
         setError('');
-        setIsLoading(true);
+        setIsGoogleLoading(true);
         try {
             await onGoogleSignIn();
         } catch (err: any) {
             setError(err.message || 'Error con el inicio de sesión de Google.');
         } finally {
-            setIsLoading(false);
+            setIsGoogleLoading(false);
         }
     };
 
     return (
         <div className="min-h-screen w-full flex flex-col items-center justify-center bg-gray-900 p-4">
             <div className="w-full max-w-sm">
-                <h1 className="text-4xl font-extrabold text-white text-center mb-2">
-                    <span className="bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-pink-500">Z</span>
-                </h1>
+                <Logo className="w-24 h-24 mx-auto mb-4" />
                 <h2 className="text-2xl font-bold text-white text-center mb-8">{title}</h2>
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <input
@@ -751,7 +1221,7 @@ const AuthForm = ({ title, buttonText, onAuth, isSignUp, onNavigate, onGoogleSig
                         required
                         minLength={6}
                     />
-                    <button type="submit" disabled={isLoading} className="w-full text-lg font-bold py-3 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 text-white transform hover:scale-105 transition-transform disabled:opacity-50">
+                    <button type="submit" disabled={isLoading || isGoogleLoading} className="w-full text-lg font-bold py-3 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 text-white transform hover:scale-105 transition-transform disabled:opacity-50">
                         {isLoading ? 'Cargando...' : buttonText}
                     </button>
                 </form>
@@ -762,9 +1232,16 @@ const AuthForm = ({ title, buttonText, onAuth, isSignUp, onNavigate, onGoogleSig
                     <div className="flex-grow border-t border-gray-700"></div>
                 </div>
 
-                <button onClick={handleGoogleClick} disabled={isLoading} className="w-full flex items-center justify-center text-lg font-bold py-3 rounded-full bg-white text-gray-800 transform hover:scale-105 transition-transform disabled:opacity-50">
-                    <GoogleIcon />
-                    {isSignUp ? 'Registrarse con Google' : 'Iniciar con Google'}
+                <button onClick={handleGoogleClick} disabled={isLoading || isGoogleLoading} className="w-full flex items-center justify-center text-lg font-bold py-3 rounded-full bg-white text-gray-800 transform hover:scale-105 transition-transform disabled:opacity-50">
+                    {isGoogleLoading ? (
+                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-800" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    ) : (
+                        <GoogleIcon />
+                    )}
+                    {isGoogleLoading ? 'Procesando...' : isSignUp ? 'Registrarse con Google' : 'Iniciar con Google'}
                 </button>
 
                 {error && <p className="text-red-400 text-center mt-4">{error}</p>}
@@ -783,7 +1260,13 @@ const AuthForm = ({ title, buttonText, onAuth, isSignUp, onNavigate, onGoogleSig
 
 const RegistrationFlow = ({ onComplete, authUser }: { onComplete: (userData: UserData) => void, authUser: FirebaseUser }) => {
     const [step, setStep] = useState(1);
-    const [formData, setFormData] = useState<Omit<UserData, 'id'>>({ name: '', username: '', dob: '', orientation: '', interests: [] });
+    const [formData, setFormData] = useState<Omit<UserData, 'id'>>({
+        name: authUser.displayName || '',
+        username: '',
+        dob: '',
+        orientation: '',
+        interests: []
+    });
     const [age, setAge] = useState<number | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -792,10 +1275,15 @@ const RegistrationFlow = ({ onComplete, authUser }: { onComplete: (userData: Use
         setIsLoading(true);
         setError(null);
         try {
+            if (!formData.name.trim() || !formData.username.trim()) {
+                setError("El nombre y el nombre de usuario no pueden estar vacíos.");
+                setIsLoading(false);
+                return;
+            }
             const finalUserData = { ...formData, id: authUser.uid };
             const result = await addUserProfile(finalUserData);
             if (result.success) {
-                onComplete(finalUserData);
+                onComplete({ ...finalUserData, followers: [], following: [] });
             } else {
                 setError("Error al guardar el perfil: " + (result.error?.message || "Error desconocido"));
             }
@@ -811,19 +1299,31 @@ const RegistrationFlow = ({ onComplete, authUser }: { onComplete: (userData: Use
     return (
         <div className="min-h-screen w-full flex flex-col items-center justify-center p-4 bg-gray-900 fade-in">
              <div className="text-center flex flex-col items-center w-full max-w-sm">
-                 <div className="w-48 h-48 rounded-full flex items-center justify-center bg-gradient-to-br from-cyan-500 to-purple-600 neon-glow pop-in">
-                    <span className="text-9xl font-extrabold text-white">Z</span>
-                 </div>
+                 <Logo className="w-48 h-48 neon-glow pop-in" />
                  <h2 className="text-4xl font-bold mt-8 pop-in">¡Casi listo!</h2>
                  <p className="text-lg text-gray-300 mt-2 pop-in">Completemos tu perfil.</p>
                 
                  <div className="w-full space-y-4 mt-8 text-left">
-                     <input type="text" placeholder="Tu nombre" onChange={e => setFormData(f => ({...f, name: e.target.value}))} className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 transition" />
-                     <input type="text" placeholder="Nombre de usuario" onChange={e => setFormData(f => ({...f, username: e.target.value}))} className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 transition" />
+                     <input
+                         type="text"
+                         placeholder="Tu nombre"
+                         value={formData.name}
+                         onChange={e => setFormData(f => ({...f, name: e.target.value}))}
+                         className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 transition"
+                         required
+                     />
+                     <input
+                         type="text"
+                         placeholder="Nombre de usuario"
+                         value={formData.username}
+                         onChange={e => setFormData(f => ({...f, username: e.target.value}))}
+                         className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 transition"
+                         required
+                     />
                      {/* Add other form fields here (DOB, interests, etc.) */}
                  </div>
 
-                 <button onClick={handleFinalRegistration} disabled={isLoading} className="w-full mt-8 text-lg font-bold py-3 rounded-full bg-white text-gray-900 pop-in disabled:opacity-50">
+                 <button onClick={handleFinalRegistration} disabled={isLoading || !formData.name.trim() || !formData.username.trim()} className="w-full mt-8 text-lg font-bold py-3 rounded-full bg-white text-gray-900 pop-in disabled:opacity-50">
                     {isLoading ? 'Guardando...' : 'Finalizar Registro'}
                 </button>
                 {error && <p className="text-red-400 text-center mt-4">{error}</p>}
@@ -843,25 +1343,47 @@ interface MainAppProps {
 const MainApp = ({ userData, setUserData }: MainAppProps) => {
     const [activeTab, setActiveTab] = useState('home');
     const [chatToOpen, setChatToOpen] = useState<{ chatId: string; otherUserName: string } | null>(null);
-
-    const handleStartChat = async (otherUser: { id: string, username: string }) => {
-        if (!userData.id) return;
-        const chatId = await findOrCreateChat(
-            { id: userData.id, username: userData.username },
-            otherUser
-        );
-        setChatToOpen({ chatId, otherUserName: otherUser.username });
-        setActiveTab('chats');
+    const [viewingProfileId, setViewingProfileId] = useState<string | null>(null);
+    const [viewingPostId, setViewingPostId] = useState<string | null>(null);
+    
+    const handleViewProfile = (userId: string) => {
+        setViewingProfileId(userId);
     };
+
+    const handleViewPost = (postId: string) => {
+        setViewingPostId(postId);
+    };
+
+    if (viewingProfileId) {
+        return (
+            <UserProfileView 
+                userId={viewingProfileId}
+                currentUserData={userData}
+                onBack={() => setViewingProfileId(null)}
+            />
+        )
+    }
+
+    if (viewingPostId) {
+        return (
+            <SinglePostView
+                postId={viewingPostId}
+                userData={userData}
+                onBack={() => setViewingPostId(null)}
+                onViewProfile={handleViewProfile}
+            />
+        );
+    }
+
 
     const renderContent = () => {
         switch (activeTab) {
-            case 'home': return <HomeFeed userData={userData} onStartChat={handleStartChat} />;
+            case 'home': return <HomeFeed userData={userData} onViewProfile={handleViewProfile} />;
             case 'discover': return <Discover />;
             case 'chats': return <ChatsPage userData={userData} chatToOpen={chatToOpen} onChatOpened={() => setChatToOpen(null)} />;
-            case 'activity': return <PagePlaceholder title="Actividad" />;
+            case 'activity': return <ActivityPage userData={userData} onViewPost={handleViewPost} onViewProfile={handleViewProfile} />;
             case 'profile': return <ProfilePage userData={userData} setUserData={setUserData} />;
-            default: return <HomeFeed userData={userData} onStartChat={handleStartChat} />;
+            default: return <HomeFeed userData={userData} onViewProfile={handleViewProfile} />;
         }
     };
 
