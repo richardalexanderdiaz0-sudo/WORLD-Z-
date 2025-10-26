@@ -134,15 +134,16 @@ const ChatsListScreen = ({ currentUser, onSelectChat }: ChatsListScreenProps) =>
                             const otherUser = getOtherParticipant(chat);
                             if (!otherUser) return null;
                             const lastMessagePreview = chat.lastMessageSenderId === currentUser.id ? `Tú: ${chat.lastMessage}` : chat.lastMessage;
+                            const otherUserName = otherUser.username || 'Usuario';
 
                             return (
-                                <div key={chat.id} onClick={() => onSelectChat(chat.id, otherUser.username)}
+                                <div key={chat.id} onClick={() => onSelectChat(chat.id, otherUserName)}
                                     className="flex items-center p-4 border-b border-gray-800 hover:bg-gray-800 cursor-pointer transition">
                                     <div className="w-12 h-12 rounded-full bg-purple-600 flex items-center justify-center text-xl font-bold mr-4 flex-shrink-0">
-                                        {otherUser.username.charAt(0).toUpperCase()}
+                                        {otherUserName ? otherUserName.charAt(0).toUpperCase() : '?'}
                                     </div>
                                     <div className="flex-grow overflow-hidden">
-                                        <p className="font-semibold text-white truncate">{otherUser.username}</p>
+                                        <p className="font-semibold text-white truncate">{otherUserName}</p>
                                         <p className="text-sm text-gray-400 truncate">{lastMessagePreview || 'Toca para chatear'}</p>
                                     </div>
                                 </div>

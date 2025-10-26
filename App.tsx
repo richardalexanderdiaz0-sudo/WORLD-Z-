@@ -14,7 +14,10 @@ import {
     getUserProfile,
     FirebaseUser,
     uploadProfilePicture,
-    updateUserProfile
+    updateUserProfile,
+    getCommentsForPost,
+    addCommentToPost,
+    Comment,
 } from './services/firebaseService';
 import Discover from './components/Discover';
 import ChatsPage from './components/ChatsPage';
@@ -91,6 +94,16 @@ const ShareIcon = () => (
         <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12s-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.368a3 3 0 105.367 2.684 3 3 0 00-5.367 2.684z" />
     </svg>
 );
+const LikeIcon = ({ liked }: { liked: boolean }) => (
+    <svg className={`w-6 h-6 transition-all duration-200 ${liked ? 'text-red-500' : 'text-gray-400 group-hover:text-red-500'}`} fill={liked ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4.318 6.318a4.5 4.5 0 016.364 0L12 7.636l1.318-1.318a4.5 4.5 0 116.364 6.364L12 20.364l-7.682-7.682a4.5 4.5 0 010-6.364z" />
+    </svg>
+);
+const CommentIcon = () => (
+     <svg className="w-6 h-6 text-gray-400 group-hover:text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+    </svg>
+);
 
 
 // --- TYPE DEFINITIONS ---
@@ -112,6 +125,136 @@ const PagePlaceholder = ({ title }: { title: string }) => (
     </div>
 );
 
+// --- COMMENTS MODAL ---
+interface CommentsModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    onCommentAdded: () => void;
+    postId: string;
+    currentUserData: UserData;
+}
+
+const CommentsModal: React.FC<CommentsModalProps> = ({ isOpen, onClose, onCommentAdded, postId, currentUserData }) => {
+    const [comments, setComments] = useState<Comment[]>([]);
+    const [newCommentText, setNewCommentText] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+    const [isPosting, setIsPosting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const commentsEndRef = useRef<HTMLDivElement>(null);
+
+    const fetchComments = useCallback(async () => {
+        if (!postId) return;
+        setIsLoading(true);
+        setError(null);
+        try {
+            const fetchedComments = await getCommentsForPost(postId);
+            setComments(fetchedComments);
+        } catch (e: any) {
+            setError('Error al cargar comentarios.');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [postId]);
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchComments();
+        }
+    }, [isOpen, fetchComments]);
+
+    useEffect(() => {
+        commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [comments]);
+
+    const handleSubmitComment = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!newCommentText.trim() || !currentUserData.id) return;
+
+        setIsPosting(true);
+        setError(null);
+
+        const commentData: Omit<Comment, 'id' | 'createdAt'> = {
+            authorId: currentUserData.id,
+            authorUsername: currentUserData.username,
+            textContent: newCommentText.trim(),
+        };
+
+        try {
+            const result = await addCommentToPost(postId, commentData);
+            if (result.success && result.newComment) {
+                setComments(prev => [...prev, result.newComment!]);
+                setNewCommentText('');
+                onCommentAdded();
+            } else {
+                setError(result.error?.message || 'No se pudo publicar el comentario.');
+            }
+        } catch (err: any) {
+            setError('Error al publicar comentario: ' + err.message);
+        } finally {
+            setIsPosting(false);
+        }
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}>
+            <div className="bg-gray-800 rounded-xl w-full max-w-lg h-[80vh] flex flex-col shadow-lg soft-glow" onClick={(e) => e.stopPropagation()}>
+                <header className="flex items-center justify-between p-4 border-b border-gray-700">
+                    <h2 className="text-xl font-bold text-cyan-400">Comentarios</h2>
+                    <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-700 transition">
+                        <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </header>
+                
+                <main className="flex-grow p-4 overflow-y-auto">
+                    {isLoading ? (
+                        <p className="text-gray-400 text-center">Cargando comentarios...</p>
+                    ) : error ? (
+                        <p className="text-red-400 text-center">{error}</p>
+                    ) : comments.length === 0 ? (
+                        <p className="text-gray-500 text-center">No hay comentarios. ¡Sé el primero en comentar!</p>
+                    ) : (
+                        <div className="space-y-4">
+                            {comments.map(comment => (
+                                <div key={comment.id} className="flex items-start space-x-3">
+                                    <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center text-sm font-bold flex-shrink-0">
+                                        {comment.authorUsername ? comment.authorUsername.charAt(0).toUpperCase() : '?'}
+                                    </div>
+                                    <div className="flex-1 bg-gray-700 rounded-lg p-2">
+                                        <p className="font-semibold text-white text-sm">{comment.authorUsername || 'Usuario'}</p>
+                                        <p className="text-gray-300">{comment.textContent}</p>
+                                    </div>
+                                </div>
+                            ))}
+                            <div ref={commentsEndRef} />
+                        </div>
+                    )}
+                </main>
+
+                <footer className="p-4 border-t border-gray-700">
+                    <form onSubmit={handleSubmitComment} className="flex items-center space-x-3">
+                        <input
+                            type="text"
+                            value={newCommentText}
+                            onChange={(e) => setNewCommentText(e.target.value)}
+                            placeholder="Añade un comentario..."
+                            className="flex-grow bg-gray-700 border border-gray-600 rounded-full py-2 px-4 text-white placeholder-gray-400 focus:outline-none focus:border-cyan-500"
+                            disabled={isPosting}
+                        />
+                        <button type="submit" className="p-3 bg-cyan-500 rounded-full text-white hover:bg-cyan-600 transition disabled:opacity-50" disabled={!newCommentText.trim() || isPosting}>
+                            {isPosting ? 
+                                <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                : <svg className="w-5 h-5 transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                            }
+                        </button>
+                    </form>
+                </footer>
+            </div>
+        </div>
+    );
+};
+
 interface PostCardProps {
     post: Post;
     userData: UserData;
@@ -120,6 +263,20 @@ interface PostCardProps {
 
 const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
     const isCurrentUserPost = userData && post.authorId === userData.id;
+    const [isLiked, setIsLiked] = useState(false);
+    const [likeCount, setLikeCount] = useState(post.likes || 0);
+    const [isCommentsModalOpen, setIsCommentsModalOpen] = useState(false);
+    const [commentCount, setCommentCount] = useState(post.commentCount || 0);
+
+    const handleLike = () => {
+        setIsLiked(!isLiked);
+        setLikeCount(prev => isLiked ? prev - 1 : prev + 1);
+        // In a real app, this would also trigger a backend update.
+    };
+    
+    const handleCommentAdded = () => {
+        setCommentCount(prev => prev + 1);
+    };
 
     const formattedDate = post.createdAt?.toDate ?
         post.createdAt.toDate().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) + ' ' +
@@ -146,8 +303,8 @@ const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
 
 
     return (
-        <div className="bg-gray-800 rounded-xl shadow-lg p-4 mb-4 soft-glow w-full max-w-lg mx-auto h-full flex flex-col">
-            <div className="flex items-center justify-between mb-4">
+        <div className="bg-gray-800 rounded-xl shadow-lg p-4 soft-glow w-full max-w-lg mx-auto flex flex-col">
+            <div className="flex items-center justify-between">
                 <div className="flex items-center">
                     <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-lg font-bold mr-3">
                         {post.authorUsername ? post.authorUsername.charAt(0).toUpperCase() : '?'}
@@ -176,15 +333,34 @@ const PostCard: React.FC<PostCardProps> = ({ post, userData, onStartChat }) => {
                     </button>
                 </div>
             </div>
-            <p className="text-gray-300 mb-4 flex-shrink-0">{post.textContent}</p>
+            <p className="text-gray-300 my-4">{post.textContent}</p>
             {post.mediaUrl && (
-                <div className="mt-auto rounded-lg overflow-hidden border border-gray-700 min-h-0">
+                <div className="rounded-lg overflow-hidden border border-gray-700">
                     {post.mediaType === 'image' ? (
                         <img src={post.mediaUrl} alt="Post media" className="w-full h-auto object-cover" />
                     ) : (
                         <video src={post.mediaUrl} controls className="w-full h-auto object-cover"></video>
                     )}
                 </div>
+            )}
+             <div className="flex items-center space-x-6 mt-4 pt-4 border-t border-gray-700/50">
+                <button onClick={handleLike} className="flex items-center space-x-1.5 text-gray-400 group focus:outline-none">
+                    <LikeIcon liked={isLiked} />
+                    <span className="font-medium text-sm transition-colors group-hover:text-red-500">{likeCount}</span>
+                </button>
+                <button onClick={() => setIsCommentsModalOpen(true)} className="flex items-center space-x-1.5 text-gray-400 group focus:outline-none">
+                    <CommentIcon />
+                    <span className="font-medium text-sm transition-colors group-hover:text-cyan-400">{commentCount}</span>
+                </button>
+            </div>
+            {post.id && (
+                <CommentsModal
+                    isOpen={isCommentsModalOpen}
+                    onClose={() => setIsCommentsModalOpen(false)}
+                    postId={post.id}
+                    currentUserData={userData}
+                    onCommentAdded={handleCommentAdded}
+                />
             )}
         </div>
     );
@@ -259,7 +435,7 @@ const CreatePostModal = ({ isOpen, onClose, onPostCreated, userData }: CreatePos
 
             const result = await createPost(newPost);
             if (result.success && result.id) {
-                onPostCreated({ ...newPost, id: result.id, createdAt: new Date() });
+                onPostCreated({ ...newPost, id: result.id, createdAt: new Date(), likes: 0, commentCount: 0 });
                 onClose();
             } else {
                 setError(result.error?.message || 'Error al crear la publicación.');
@@ -349,69 +525,18 @@ const HomeFeed = ({ userData, onStartChat }: { userData: UserData, onStartChat: 
         setPosts((prevPosts) => [newPost, ...prevPosts]);
     };
 
-    // --- Virtualization Logic ---
-    const scrollContainerRef = useRef<HTMLDivElement>(null);
-    const [scrollTop, setScrollTop] = useState(0);
-    const [containerHeight, setContainerHeight] = useState(0);
-
-    const ITEM_HEIGHT = 550; // Estimated height for one post card to avoid content clipping
-    const OVERSCAN_COUNT = 3;
-
-    useEffect(() => {
-        const container = scrollContainerRef.current;
-        if (!container) return;
-
-        const updateHeight = () => {
-            setContainerHeight(container.clientHeight);
-        };
-        updateHeight(); // Initial set
-
-        const resizeObserver = new ResizeObserver(updateHeight);
-        resizeObserver.observe(container);
-
-        return () => resizeObserver.disconnect();
-    }, []);
-
-    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-        setScrollTop(e.currentTarget.scrollTop);
-    };
-
-    const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN_COUNT);
-    const endIndex = Math.min(
-      posts.length - 1,
-      Math.floor((scrollTop + containerHeight) / ITEM_HEIGHT) + OVERSCAN_COUNT
-    );
-
-    const visiblePosts = posts.slice(startIndex, endIndex + 1);
-    // --- End Virtualization Logic ---
-
     return (
-        <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-grow flex flex-col items-center p-4 bg-gray-900 overflow-y-auto relative">
+        <div className="flex-grow flex flex-col items-center p-4 bg-gray-900 overflow-y-auto relative">
             <h1 className="text-4xl font-bold text-cyan-400 my-4">Tu Feed</h1>
 
             {loadingPosts ? <p className="text-gray-400">Cargando publicaciones...</p>
             : errorPosts ? <p className="text-red-400">{errorPosts}</p>
             : posts.length === 0 ? <p className="text-gray-500">Sé el primero en publicar algo genial!</p>
             : (
-                <div className="w-full max-w-lg" style={{ position: 'relative', height: `${posts.length * ITEM_HEIGHT}px` }}>
-                    {visiblePosts.map((post, index) => {
-                        const actualIndex = startIndex + index;
-                        return (
-                            <div
-                                key={post.id}
-                                style={{
-                                    position: 'absolute',
-                                    top: `${actualIndex * ITEM_HEIGHT}px`,
-                                    left: 0,
-                                    right: 0,
-                                    height: `${ITEM_HEIGHT}px`,
-                                    paddingBottom: '16px' // Replicate spacing from original PostCard mb-4
-                                }}
-                            >
-                                <PostCard post={post} userData={userData} onStartChat={onStartChat} />
-                            </div>
-                        );
-                    })}
+                <div className="w-full max-w-lg space-y-4 pb-4">
+                    {posts.map(post => (
+                        <PostCard key={post.id} post={post} userData={userData} onStartChat={onStartChat} />
+                    ))}
                 </div>
             )}
 
